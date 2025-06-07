@@ -55,13 +55,13 @@ private:
 PurePursuitController::PurePursuitController()
 : Node("pure_pursuit_controller")
 {
-    this->declare_parameter("lookahead_distance", 0.5);
-    this->declare_parameter("linear_velocity", 0.5);
-    this->declare_parameter("max_angular_velocity", 2.0);
+    this->declare_parameter("lookahead_distance", 1.0);
+    this->declare_parameter("linear_velocity", 0.15);
+    this->declare_parameter("max_angular_velocity", 0.8);
     this->declare_parameter("goal_tolerance", 0.15);
-    this->declare_parameter("min_lookahead_distance", 0.3);
-    this->declare_parameter("max_lookahead_distance", 0.7);
-    this->declare_parameter("steering_gain", 1.5);
+    this->declare_parameter("min_lookahead_distance", 0.7);
+    this->declare_parameter("max_lookahead_distance", 1.2);
+    this->declare_parameter("steering_gain", 0.4);
     
     lookahead_distance_ = this->get_parameter("lookahead_distance").as_double();
     linear_velocity_ = this->get_parameter("linear_velocity").as_double();
@@ -160,27 +160,17 @@ void PurePursuitController::findLookAheadPoint()
     double min_lookahead = this->get_parameter("min_lookahead_distance").as_double();
     double max_lookahead = this->get_parameter("max_lookahead_distance").as_double();
     double current_lookahead = min_lookahead + 
-        (max_lookahead - min_lookahead) * (std::abs(linear_velocity_) / 0.5);
+        (max_lookahead - min_lookahead) * (std::abs(linear_velocity_) / 0.4);
     
     lookahead_point_ = path_.poses.back().pose;
     size_t lookahead_idx = closest_idx;
     
     for (size_t i = closest_idx; i < path_.poses.size() - 1; ++i) {
-        double dx = path_.poses[i+1].pose.position.x - path_.poses[i].pose.position.x;
-        double dy = path_.poses[i+1].pose.position.y - path_.poses[i].pose.position.y;
-        double segment_length = std::sqrt(dx*dx + dy*dy);
+        double dx = path_.poses[i+1].pose.position.x - current_pose_.pose.position.x;
+        double dy = path_.poses[i+1].pose.position.y - current_pose_.pose.position.y;
+        double dist_to_point = std::sqrt(dx*dx + dy*dy);
         
-        double x1 = path_.poses[i].pose.position.x - current_pose_.pose.position.x;
-        double y1 = path_.poses[i].pose.position.y - current_pose_.pose.position.y;
-        double x2 = path_.poses[i+1].pose.position.x - current_pose_.pose.position.x;
-        double y2 = path_.poses[i+1].pose.position.y - current_pose_.pose.position.y;
-        
-        double a = x2 - x1;
-        double b = y2 - y1;
-        double c = x1*x1 + y1*y1 - current_lookahead*current_lookahead;
-        
-        double discriminant = 4*(a*a + b*b)*(-c);
-        if (discriminant >= 0) {
+        if (dist_to_point >= current_lookahead) {
             lookahead_point_ = path_.poses[i+1].pose;
             lookahead_idx = i+1;
             break;
@@ -249,11 +239,30 @@ void PurePursuitController::computeControl()
     double dx = lookahead_point_.position.x - current_pose_.pose.position.x;
     double dy = lookahead_point_.position.y - current_pose_.pose.position.y;
     
+    // Initialize with default values
+    geometry_msgs::msg::Twist cmd_vel;
+    cmd_vel.linear.x = 0.0;
+    cmd_vel.angular.z = 0.0;
+
+    // Check if we have valid quaternion
+    if (std::isnan(current_pose_.pose.orientation.x) ||
+        std::isnan(current_pose_.pose.orientation.y) ||
+        std::isnan(current_pose_.pose.orientation.z) ||
+        std::isnan(current_pose_.pose.orientation.w)) {
+        RCLCPP_WARN(this->get_logger(), "Invalid quaternion detected");
+        cmd_vel_pub_->publish(cmd_vel);
+        return;
+    }
+
     tf2::Quaternion q(
         current_pose_.pose.orientation.x,
         current_pose_.pose.orientation.y,
         current_pose_.pose.orientation.z,
         current_pose_.pose.orientation.w);
+    
+    // Normalize quaternion
+    q.normalize();
+    
     tf2::Matrix3x3 m(q);
     double roll, pitch, yaw;
     m.getRPY(roll, pitch, yaw);
@@ -265,29 +274,44 @@ void PurePursuitController::computeControl()
     while (heading_error > M_PI) heading_error -= 2.0 * M_PI;
     while (heading_error < -M_PI) heading_error += 2.0 * M_PI;
 
-    geometry_msgs::msg::Twist cmd_vel;
-    
     // Get time-parameterized velocity
     double desired_velocity = getDesiredVelocity();
-    double curvature_factor = std::max(0.5, 1.0 - path_curvature_);
-    double heading_factor = std::cos(heading_error * 0.5);
+    
+    // Ensure desired_velocity is valid
+    if (std::isnan(desired_velocity) || std::isinf(desired_velocity)) {
+        desired_velocity = linear_velocity_;
+    }
+    
+    double curvature_factor = std::max(0.2, 1.0 - std::abs(path_curvature_) * 3.0);
+    double heading_factor = std::max(0.3, std::cos(heading_error * 0.2));
     cmd_vel.linear.x = desired_velocity * curvature_factor * heading_factor;
 
     // Ensure we don't exceed max velocity while maintaining minimum speed
-    cmd_vel.linear.x = std::min(std::max(cmd_vel.linear.x, 0.1), linear_velocity_);
+    cmd_vel.linear.x = std::min(std::max(cmd_vel.linear.x, 0.03), linear_velocity_);
 
     double lookahead_dist = std::sqrt(dx*dx + dy*dy);
-    if (lookahead_dist > 0.001) {
+    if (lookahead_dist > 0.01) {
         double curvature = 2.0 * std::sin(heading_error) / lookahead_dist;
         cmd_vel.angular.z = std::max(-max_angular_velocity_,
                                    std::min(max_angular_velocity_,
                                           steering_gain * cmd_vel.linear.x * curvature));
+    } else {
+        // If lookahead distance is too small, use a default angular velocity
+        cmd_vel.angular.z = std::copysign(0.1, heading_error);
     }
 
     // Only stop for very large heading errors
-    if (std::abs(heading_error) > 3.0 * M_PI / 4.0) {
-        cmd_vel.linear.x = 0.1;  // Keep minimum velocity instead of full stop
-        cmd_vel.angular.z = std::copysign(max_angular_velocity_, heading_error);
+    if (std::abs(heading_error) > M_PI / 2.0) {
+        cmd_vel.linear.x = 0.05;  // Keep minimum velocity instead of full stop
+        cmd_vel.angular.z = std::copysign(max_angular_velocity_ * 0.8, heading_error);
+    }
+
+    // Final sanity check
+    if (std::isnan(cmd_vel.linear.x) || std::isnan(cmd_vel.angular.z) ||
+        std::isinf(cmd_vel.linear.x) || std::isinf(cmd_vel.angular.z)) {
+        RCLCPP_WARN(this->get_logger(), "Invalid velocity command detected, stopping robot");
+        cmd_vel.linear.x = 0.0;
+        cmd_vel.angular.z = 0.0;
     }
 
     cmd_vel_pub_->publish(cmd_vel);

@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.5)
+cmake_minimum_required(VERSION 3.8)
 project(trajectory_tracking)
 
 # Default to C++14
@@ -16,20 +16,23 @@ find_package(rclcpp REQUIRED)
 find_package(nav_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(tf2 REQUIRED)
+find_package(tf2_ros REQUIRED)
 find_package(tf2_geometry_msgs REQUIRED)
-find_package(yaml-cpp REQUIRED)
 find_package(visualization_msgs REQUIRED)
+find_package(yaml-cpp REQUIRED)
 find_package(rosidl_default_generators REQUIRED)
 
-# Generate messages first
+# Generate message interfaces
 rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/TimedTrajectoryPoint.msg"
   "msg/TimedTrajectory.msg"
+  DEPENDENCIES geometry_msgs
 )
 
 # Add include directory for headers
 include_directories(
   include
+  ${YAML_CPP_INCLUDE_DIR}
 )
 
 if(BUILD_TESTING)
@@ -44,70 +47,78 @@ if(BUILD_TESTING)
   ament_lint_auto_find_test_dependencies()
 endif()
 
-# Add library
-add_library(trajectory_tracking_lib
-  src/trajectory_generator.cpp
+# Add the BSpline library
+add_library(bspline
   src/bspline.cpp
-  src/path_smoother.cpp
-  src/trajectory_parameterizer.cpp
 )
-ament_target_dependencies(trajectory_tracking_lib
+
+ament_target_dependencies(bspline
   rclcpp
   nav_msgs
   geometry_msgs
   tf2
+  tf2_ros
   tf2_geometry_msgs
+  visualization_msgs
   yaml-cpp
+)
+
+# Add the S-curve velocity profile library
+add_library(s_curve_velocity_profile
+  src/s_curve_velocity_profile.cpp
+)
+
+ament_target_dependencies(s_curve_velocity_profile
+  rclcpp
+  nav_msgs
+  geometry_msgs
+  tf2
+  tf2_ros
+  tf2_geometry_msgs
   visualization_msgs
 )
-rosidl_get_typesupport_target(cpp_typesupport_target 
-  ${PROJECT_NAME} "rosidl_typesupport_cpp")
-target_link_libraries(trajectory_tracking_lib 
+
+# Add the trajectory generator executable
+add_executable(trajectory_generator
+  src/trajectory_generator.cpp
+)
+
+target_link_libraries(trajectory_generator
+  s_curve_velocity_profile
+  bspline
   yaml-cpp
-  "${cpp_typesupport_target}"
-)
-target_include_directories(trajectory_tracking_lib PUBLIC
-  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-  $<INSTALL_INTERFACE:include>
 )
 
-# Add pure pursuit controller executable
-add_executable(pure_pursuit_controller src/pure_pursuit_controller.cpp)
-ament_target_dependencies(pure_pursuit_controller
-  rclcpp
-  nav_msgs
-  geometry_msgs
-  tf2
-  tf2_geometry_msgs
-)
-target_link_libraries(pure_pursuit_controller 
-  trajectory_tracking_lib
-  "${cpp_typesupport_target}"
-)
-
-# Add trajectory generator executable
-add_executable(trajectory_generator 
-  src/trajectory_generator.cpp 
-  src/bspline.cpp
-  src/path_smoother.cpp
-)
 ament_target_dependencies(trajectory_generator
   rclcpp
   nav_msgs
   geometry_msgs
   tf2
+  tf2_ros
   tf2_geometry_msgs
-  yaml-cpp
   visualization_msgs
 )
-target_link_libraries(trajectory_generator 
-  trajectory_tracking_lib
-  "${cpp_typesupport_target}"
+
+rosidl_target_interfaces(trajectory_generator
+  ${PROJECT_NAME} "rosidl_typesupport_cpp")
+
+# Add the pure pursuit controller executable
+add_executable(pure_pursuit_controller
+  src/pure_pursuit_controller.cpp
 )
-target_include_directories(trajectory_generator PUBLIC
-  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-  $<INSTALL_INTERFACE:include>
+
+ament_target_dependencies(pure_pursuit_controller
+  rclcpp
+  nav_msgs
+  geometry_msgs
+  tf2
+  tf2_ros
+  tf2_geometry_msgs
+  visualization_msgs
 )
+
+rosidl_target_interfaces(pure_pursuit_controller
+  ${PROJECT_NAME} "rosidl_typesupport_cpp")
 
 # Add trajectory visualizer executable
 add_executable(trajectory_visualizer src/trajectory_visualizer.cpp)
@@ -120,26 +131,30 @@ ament_target_dependencies(trajectory_visualizer
   visualization_msgs
 )
 target_link_libraries(trajectory_visualizer 
-  trajectory_tracking_lib
   "${cpp_typesupport_target}"
 )
 
-# Install executables
+# Install targets
 install(TARGETS
+  bspline
   trajectory_generator
   pure_pursuit_controller
   trajectory_visualizer
-  trajectory_tracking_lib
-  DESTINATION lib/${PROJECT_NAME}
+  s_curve_velocity_profile
+  ARCHIVE DESTINATION lib
+  LIBRARY DESTINATION lib
+  RUNTIME DESTINATION lib/${PROJECT_NAME}
 )
 
-# Install config files
+# Install headers
 install(DIRECTORY include/
   DESTINATION include/
 )
 
-install(DIRECTORY config/
-  DESTINATION share/${PROJECT_NAME}/config/
+# Install config files
+install(DIRECTORY
+  config/
+  DESTINATION share/${PROJECT_NAME}/config
 )
 
 install(DIRECTORY msg/

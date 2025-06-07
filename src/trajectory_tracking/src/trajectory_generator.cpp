@@ -12,6 +12,7 @@
 #include <string>
 #include "trajectory_tracking/bspline.h"
 #include "trajectory_tracking/trajectory_parameterizer.h"
+#include "trajectory_tracking/s_curve_velocity_profile.h"
 #include "visualization_msgs/msg/marker_array.hpp"
 #include "trajectory_tracking/msg/timed_trajectory_point.hpp"
 #include "trajectory_tracking/msg/timed_trajectory.hpp"
@@ -46,11 +47,13 @@ TrajectoryGenerator::TrajectoryGenerator() : Node("trajectory_generator")
 {
     this->declare_parameter("waypoints_file", "waypoints.yaml");
     this->declare_parameter("bspline_degree", 3);  // Increased for smoother curves
-    this->declare_parameter("bspline_samples", 200);  // Increased for smoother visualization
+    this->declare_parameter("bspline_samples", 600);  // Increased for smoother visualization
     this->declare_parameter("control_point_spacing", 0.3);  // Distance between control points
     this->declare_parameter("control_point_multiplier", 2);  // Number of control points between waypoints
-    this->declare_parameter("max_velocity", 0.5);  // Increased to match controller
-    this->declare_parameter("min_velocity", 0.2);  // Minimum velocity in curves
+    this->declare_parameter("max_velocity", 0.5);  // Maximum velocity
+    this->declare_parameter("min_velocity", 0.15);  // Minimum velocity in curves
+    this->declare_parameter("max_acceleration", 0.15);  // Maximum acceleration for S-curve
+    this->declare_parameter("max_jerk", 0.3);  // Maximum jerk for S-curve
     this->declare_parameter("sampling_interval", 0.05);
 
     path_pub_ = this->create_publisher<nav_msgs::msg::Path>("/path", 10);
@@ -139,7 +142,6 @@ void TrajectoryGenerator::generateTrajectory()
 
     // Generate control points with better spacing
     std::vector<trajectory_tracking::Point2D> control_points;
-    double spacing = this->get_parameter("control_point_spacing").as_double();
     int multiplier = this->get_parameter("control_point_multiplier").as_int();
     
     // Add first waypoint
@@ -224,69 +226,66 @@ void TrajectoryGenerator::generateTrajectory()
     RCLCPP_INFO(this->get_logger(), "Generated B-spline smoothed trajectory with %zu points", 
                 path_.poses.size());
 
-    // Generate time-parameterized trajectory
-    trajectory_tracking::VelocityLimits limits;
-    limits.max_velocity = this->get_parameter("max_velocity").as_double();
-    limits.max_acceleration = limits.max_velocity;  // Increased acceleration limit
-    limits.max_jerk = limits.max_acceleration;  // Increased jerk limit
+    // Create S-curve velocity profile
+    trajectory_tracking::SCurveVelocityProfile::VelocityConstraints constraints;
+    constraints.max_velocity = this->get_parameter("max_velocity").as_double();
+    constraints.max_acceleration = this->get_parameter("max_acceleration").as_double();
+    constraints.max_jerk = this->get_parameter("max_jerk").as_double();
 
-    trajectory_tracking::TrajectoryParameterizer parameterizer(limits);
-    
-    // Convert smoothed points to waypoint pairs
-    std::vector<std::pair<double, double>> waypoint_pairs;
-    timed_traj_.points.clear();
-    
-    double time_step = 0.0;
-    double min_velocity = this->get_parameter("min_velocity").as_double();
-    double max_velocity = this->get_parameter("max_velocity").as_double();
+    trajectory_tracking::SCurveVelocityProfile velocity_profile(constraints);
 
-    for (size_t i = 0; i < smoothed_points.size(); ++i) {
-        const auto& pt = smoothed_points[i];
-        waypoint_pairs.emplace_back(pt.x, pt.y);
-        
-        // Add point to timed trajectory
-        trajectory_tracking::msg::TimedTrajectoryPoint point;
-        point.x = pt.x;
-        point.y = pt.y;
-        point.t = time_step;
-        timed_traj_.points.push_back(point);
-        
-        // Update time step based on distance and velocity
-        if (i < smoothed_points.size() - 1) {
-            double dx = smoothed_points[i+1].x - pt.x;
-            double dy = smoothed_points[i+1].y - pt.y;
-            double distance = std::sqrt(dx*dx + dy*dy);
-            
-            // Calculate velocity based on curvature
-            double velocity = max_velocity;
-            if (i > 0 && i < smoothed_points.size() - 1) {
-                double prev_yaw = std::atan2(pt.y - smoothed_points[i-1].y,
-                                           pt.x - smoothed_points[i-1].x);
-                double next_yaw = std::atan2(smoothed_points[i+1].y - pt.y,
-                                           smoothed_points[i+1].x - pt.x);
-                double angle_diff = std::abs(next_yaw - prev_yaw);
-                if (angle_diff > M_PI) angle_diff = 2 * M_PI - angle_diff;
-                
-                // Scale velocity between min and max based on curvature
-                double scale = std::max(0.4, 1.0 - angle_diff / M_PI);
-                velocity = min_velocity + (max_velocity - min_velocity) * scale;
-            }
-            
-            time_step += distance / velocity;
-        }
+    // Calculate total path length
+    double total_distance = 0.0;
+    for (size_t i = 0; i < smoothed_points.size() - 1; ++i) {
+        double dx = smoothed_points[i+1].x - smoothed_points[i].x;
+        double dy = smoothed_points[i+1].y - smoothed_points[i].y;
+        total_distance += std::sqrt(dx*dx + dy*dy);
     }
 
-    // Generate final trajectory
-    timed_traj_ = parameterizer.parameterizeTrajectory(waypoint_pairs);
+    // Generate velocity profile
+    auto velocities = velocity_profile.generateProfile(total_distance);
+    double total_duration = velocity_profile.getTotalDuration();
+
+    // Create time-parameterized trajectory
+    timed_traj_.points.clear();
+    double current_time = 0.0;
+    double current_distance = 0.0;
+
+    for (size_t i = 0; i < smoothed_points.size(); ++i) {
+        trajectory_tracking::msg::TimedTrajectoryPoint point;
+        point.x = smoothed_points[i].x;
+        point.y = smoothed_points[i].y;
+        
+        // Calculate time based on distance and velocity profile
+        if (i > 0) {
+            double dx = smoothed_points[i].x - smoothed_points[i-1].x;
+            double dy = smoothed_points[i].y - smoothed_points[i-1].y;
+            double segment_length = std::sqrt(dx*dx + dy*dy);
+            current_distance += segment_length;
+            
+            // Get velocity at current distance
+            double velocity = velocity_profile.getVelocityAtTime(current_time);
+            double dt = segment_length / velocity;
+            current_time += dt;
+        }
+        
+        point.t = current_time;
+        timed_traj_.points.push_back(point);
+    }
 
     // Save to CSV for visualization/debugging
     std::ofstream csv("src/trajectory_tracking/time_parameterized_traj/bspline_trajectory.csv");
-    csv << "x,y,t\n";
-    for (const auto& pt : timed_traj_.points) {
-        csv << pt.x << "," << pt.y << "," << pt.t << "\n";
+    csv << "x,y,t,v\n";
+    for (size_t i = 0; i < timed_traj_.points.size(); ++i) {
+        double velocity = (i < velocities.size()) ? velocities[i] : velocities.back();
+        csv << timed_traj_.points[i].x << "," 
+            << timed_traj_.points[i].y << "," 
+            << timed_traj_.points[i].t << ","
+            << velocity << "\n";
     }
     csv.close();
-    RCLCPP_INFO(this->get_logger(), "Saved time-parameterized trajectory to time_parameterized_traj/bspline_trajectory.csv");
+    
+    RCLCPP_INFO(this->get_logger(), "Generated S-curve velocity profile with duration %.2f seconds", total_duration);
 }
 
 void TrajectoryGenerator::publishWaypoints()

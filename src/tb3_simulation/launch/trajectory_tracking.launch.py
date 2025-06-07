@@ -71,21 +71,27 @@ def generate_launch_description():
         output='screen'
     )
 
-    # Trajectory Generator
+    # Parameter file paths
+    trajectory_generator_params = os.path.join(pkg_trajectory_tracking, 'config', 'trajectory_generator_params.yaml')
+    pure_pursuit_controller_params = os.path.join(pkg_trajectory_tracking, 'config', 'pure_pursuit_controller_params.yaml')
     waypoints_file_path = os.path.join(pkg_trajectory_tracking, 'config', 'waypoints.yaml')
-    print(f"Using waypoints file: {waypoints_file_path}")  # Debug output
+    
+    print(f"Using trajectory generator params: {trajectory_generator_params}")
+    print(f"Using controller params: {pure_pursuit_controller_params}")
+    print(f"Using waypoints file: {waypoints_file_path}")
+
+    # Trajectory Generator
     trajectory_generator = Node(
         package='trajectory_tracking',
         executable='trajectory_generator',
         name='trajectory_generator',
-        parameters=[{
-            'use_sim_time': True,
-            'waypoints_file': waypoints_file_path,
-            'path_resolution': 0.02,
-            'weight_data': 0.1,
-            'weight_smooth': 0.8,
-            'weight_curvature': 0.1
-        }],
+        parameters=[
+            trajectory_generator_params,
+            {
+                'use_sim_time': True,
+                'waypoints_file': waypoints_file_path,
+            }
+        ],
         output='screen'
     )
 
@@ -95,13 +101,12 @@ def generate_launch_description():
         executable='pure_pursuit_controller',
         name='pure_pursuit_controller',
         output='screen',
-        parameters=[{
-            'use_sim_time': True,
-            'lookahead_distance': 0.5,
-            'linear_velocity': 0.2,
-            'max_angular_velocity': 1.0,
-            'goal_tolerance': 0.2
-        }]
+        parameters=[
+            pure_pursuit_controller_params,
+            {
+                'use_sim_time': True,
+            }
+        ]
     )
 
     # RViz

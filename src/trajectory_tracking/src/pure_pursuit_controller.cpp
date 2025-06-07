@@ -25,6 +25,7 @@ private:
     bool checkGoalReached();
     void findLookAheadPoint();
     void computeControl();
+    double getDesiredVelocity();
 
     double lookahead_distance_;
     double linear_velocity_;
@@ -46,18 +47,21 @@ private:
     rclcpp::Subscription<trajectory_tracking::msg::TimedTrajectory>::SharedPtr timed_traj_sub_;
 
     double path_curvature_ = 0.0;
+    rclcpp::Time trajectory_start_time_;
+    bool trajectory_started_ = false;
+    size_t current_trajectory_index_ = 0;
 };
 
 PurePursuitController::PurePursuitController()
 : Node("pure_pursuit_controller")
 {
-    this->declare_parameter("lookahead_distance", 0.3);
-    this->declare_parameter("linear_velocity", 0.2);
-    this->declare_parameter("max_angular_velocity", 1.0);
+    this->declare_parameter("lookahead_distance", 0.5);
+    this->declare_parameter("linear_velocity", 0.5);
+    this->declare_parameter("max_angular_velocity", 2.0);
     this->declare_parameter("goal_tolerance", 0.15);
-    this->declare_parameter("min_lookahead_distance", 0.2);
-    this->declare_parameter("max_lookahead_distance", 0.4);
-    this->declare_parameter("steering_gain", 2.0);
+    this->declare_parameter("min_lookahead_distance", 0.3);
+    this->declare_parameter("max_lookahead_distance", 0.7);
+    this->declare_parameter("steering_gain", 1.5);
     
     lookahead_distance_ = this->get_parameter("lookahead_distance").as_double();
     linear_velocity_ = this->get_parameter("linear_velocity").as_double();
@@ -118,6 +122,8 @@ void PurePursuitController::pathCallback(const nav_msgs::msg::Path::SharedPtr ms
 void PurePursuitController::timedTrajectoryCallback(const trajectory_tracking::msg::TimedTrajectory::SharedPtr msg)
 {
     timed_traj_ = msg->points;
+    trajectory_started_ = false;
+    current_trajectory_index_ = 0;
     RCLCPP_INFO(this->get_logger(), "Received timed trajectory with %zu points", timed_traj_.size());
 }
 
@@ -199,6 +205,45 @@ void PurePursuitController::findLookAheadPoint()
     path_curvature_ = curvature;
 }
 
+double PurePursuitController::getDesiredVelocity()
+{
+    if (timed_traj_.empty()) {
+        return linear_velocity_;  // Fall back to default velocity
+    }
+
+    if (!trajectory_started_) {
+        trajectory_start_time_ = this->now();
+        trajectory_started_ = true;
+        current_trajectory_index_ = 0;
+    }
+
+    // Get current time since trajectory start
+    double current_time = (this->now() - trajectory_start_time_).seconds();
+
+    // Find the appropriate trajectory segment
+    while (current_trajectory_index_ < timed_traj_.size() - 1 && 
+           timed_traj_[current_trajectory_index_ + 1].t < current_time) {
+        current_trajectory_index_++;
+    }
+
+    if (current_trajectory_index_ >= timed_traj_.size() - 1) {
+        return linear_velocity_;  // At the end of trajectory
+    }
+
+    // Calculate desired velocity based on time parameterization
+    const auto& current_point = timed_traj_[current_trajectory_index_];
+    const auto& next_point = timed_traj_[current_trajectory_index_ + 1];
+    
+    double dt = next_point.t - current_point.t;
+    if (dt <= 0.0) return linear_velocity_;
+
+    double dx = next_point.x - current_point.x;
+    double dy = next_point.y - current_point.y;
+    double distance = std::sqrt(dx*dx + dy*dy);
+    
+    return distance / dt;  // Return velocity needed to reach next point on time
+}
+
 void PurePursuitController::computeControl()
 {
     double dx = lookahead_point_.position.x - current_pose_.pose.position.x;
@@ -222,9 +267,14 @@ void PurePursuitController::computeControl()
 
     geometry_msgs::msg::Twist cmd_vel;
     
-    double curvature_factor = std::max(0.3, 1.0 - path_curvature_);
-    double heading_factor = std::cos(heading_error);
-    cmd_vel.linear.x = linear_velocity_ * curvature_factor * heading_factor;
+    // Get time-parameterized velocity
+    double desired_velocity = getDesiredVelocity();
+    double curvature_factor = std::max(0.5, 1.0 - path_curvature_);
+    double heading_factor = std::cos(heading_error * 0.5);
+    cmd_vel.linear.x = desired_velocity * curvature_factor * heading_factor;
+
+    // Ensure we don't exceed max velocity while maintaining minimum speed
+    cmd_vel.linear.x = std::min(std::max(cmd_vel.linear.x, 0.1), linear_velocity_);
 
     double lookahead_dist = std::sqrt(dx*dx + dy*dy);
     if (lookahead_dist > 0.001) {
@@ -234,14 +284,15 @@ void PurePursuitController::computeControl()
                                           steering_gain * cmd_vel.linear.x * curvature));
     }
 
-    if (std::abs(heading_error) > M_PI / 2.0) {
-        cmd_vel.linear.x = 0.0;
-        cmd_vel.angular.z = std::copysign(max_angular_velocity_ / 2.0, heading_error);
+    // Only stop for very large heading errors
+    if (std::abs(heading_error) > 3.0 * M_PI / 4.0) {
+        cmd_vel.linear.x = 0.1;  // Keep minimum velocity instead of full stop
+        cmd_vel.angular.z = std::copysign(max_angular_velocity_, heading_error);
     }
 
     cmd_vel_pub_->publish(cmd_vel);
-    RCLCPP_DEBUG(this->get_logger(), "Published cmd_vel: linear.x=%.2f, angular.z=%.2f", 
-               cmd_vel.linear.x, cmd_vel.angular.z);
+    RCLCPP_DEBUG(this->get_logger(), "Published cmd_vel: linear.x=%.2f, angular.z=%.2f, desired_velocity=%.2f", 
+               cmd_vel.linear.x, cmd_vel.angular.z, desired_velocity);
 }
 
 int main(int argc, char** argv)

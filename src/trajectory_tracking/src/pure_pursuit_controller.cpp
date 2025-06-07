@@ -11,6 +11,7 @@
 #include <cmath>
 #include <limits>
 #include <functional>
+#include "trajectory_tracking/msg/timed_trajectory.hpp"
 
 class PurePursuitController : public rclcpp::Node
 {
@@ -20,6 +21,7 @@ public:
 private:
     void odomCallback(const nav_msgs::msg::Odometry::SharedPtr msg);
     void pathCallback(const nav_msgs::msg::Path::SharedPtr msg);
+    void timedTrajectoryCallback(const trajectory_tracking::msg::TimedTrajectory::SharedPtr msg);
     bool checkGoalReached();
     void findLookAheadPoint();
     void computeControl();
@@ -33,6 +35,7 @@ private:
     geometry_msgs::msg::PoseStamped current_pose_;
     geometry_msgs::msg::Pose lookahead_point_;
     nav_msgs::msg::Path path_;
+    std::vector<trajectory_tracking::msg::TimedTrajectoryPoint> timed_traj_;
 
     std::unique_ptr<tf2_ros::Buffer> tf_buffer_;
     std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
@@ -40,15 +43,21 @@ private:
     rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr cmd_vel_pub_;
     rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
     rclcpp::Subscription<nav_msgs::msg::Path>::SharedPtr path_sub_;
+    rclcpp::Subscription<trajectory_tracking::msg::TimedTrajectory>::SharedPtr timed_traj_sub_;
+
+    double path_curvature_ = 0.0;
 };
 
 PurePursuitController::PurePursuitController()
 : Node("pure_pursuit_controller")
 {
-    this->declare_parameter("lookahead_distance", 0.5);
-    this->declare_parameter("linear_velocity", 0.5);
+    this->declare_parameter("lookahead_distance", 0.3);
+    this->declare_parameter("linear_velocity", 0.2);
     this->declare_parameter("max_angular_velocity", 1.0);
     this->declare_parameter("goal_tolerance", 0.15);
+    this->declare_parameter("min_lookahead_distance", 0.2);
+    this->declare_parameter("max_lookahead_distance", 0.4);
+    this->declare_parameter("steering_gain", 2.0);
     
     lookahead_distance_ = this->get_parameter("lookahead_distance").as_double();
     linear_velocity_ = this->get_parameter("linear_velocity").as_double();
@@ -63,7 +72,8 @@ PurePursuitController::PurePursuitController()
         "/odom", 10, std::bind(&PurePursuitController::odomCallback, this, std::placeholders::_1));
     path_sub_ = this->create_subscription<nav_msgs::msg::Path>(
         "/path", 10, std::bind(&PurePursuitController::pathCallback, this, std::placeholders::_1));
-
+    timed_traj_sub_ = this->create_subscription<trajectory_tracking::msg::TimedTrajectory>(
+        "/timed_trajectory", 10, std::bind(&PurePursuitController::timedTrajectoryCallback, this, std::placeholders::_1));
     RCLCPP_INFO(this->get_logger(), "Pure Pursuit Controller initialized");
 }
 
@@ -105,6 +115,12 @@ void PurePursuitController::pathCallback(const nav_msgs::msg::Path::SharedPtr ms
                 path_.poses.size(), path_.header.frame_id.c_str());
 }
 
+void PurePursuitController::timedTrajectoryCallback(const trajectory_tracking::msg::TimedTrajectory::SharedPtr msg)
+{
+    timed_traj_ = msg->points;
+    RCLCPP_INFO(this->get_logger(), "Received timed trajectory with %zu points", timed_traj_.size());
+}
+
 bool PurePursuitController::checkGoalReached()
 {
     if (path_.poses.empty()) return false;
@@ -135,17 +151,52 @@ void PurePursuitController::findLookAheadPoint()
         }
     }
 
-    lookahead_point_ = path_.poses.back().pose; // Default to goal
-    for (size_t i = closest_idx; i < path_.poses.size(); ++i) {
-        double dx = path_.poses[i].pose.position.x - current_pose_.pose.position.x;
-        double dy = path_.poses[i].pose.position.y - current_pose_.pose.position.y;
-        double dist = std::sqrt(dx*dx + dy*dy);
+    double min_lookahead = this->get_parameter("min_lookahead_distance").as_double();
+    double max_lookahead = this->get_parameter("max_lookahead_distance").as_double();
+    double current_lookahead = min_lookahead + 
+        (max_lookahead - min_lookahead) * (std::abs(linear_velocity_) / 0.5);
+    
+    lookahead_point_ = path_.poses.back().pose;
+    size_t lookahead_idx = closest_idx;
+    
+    for (size_t i = closest_idx; i < path_.poses.size() - 1; ++i) {
+        double dx = path_.poses[i+1].pose.position.x - path_.poses[i].pose.position.x;
+        double dy = path_.poses[i+1].pose.position.y - path_.poses[i].pose.position.y;
+        double segment_length = std::sqrt(dx*dx + dy*dy);
         
-        if (dist >= lookahead_distance_) {
-            lookahead_point_ = path_.poses[i].pose;
+        double x1 = path_.poses[i].pose.position.x - current_pose_.pose.position.x;
+        double y1 = path_.poses[i].pose.position.y - current_pose_.pose.position.y;
+        double x2 = path_.poses[i+1].pose.position.x - current_pose_.pose.position.x;
+        double y2 = path_.poses[i+1].pose.position.y - current_pose_.pose.position.y;
+        
+        double a = x2 - x1;
+        double b = y2 - y1;
+        double c = x1*x1 + y1*y1 - current_lookahead*current_lookahead;
+        
+        double discriminant = 4*(a*a + b*b)*(-c);
+        if (discriminant >= 0) {
+            lookahead_point_ = path_.poses[i+1].pose;
+            lookahead_idx = i+1;
             break;
         }
     }
+
+    double curvature = 0.0;
+    if (lookahead_idx > 0 && lookahead_idx < path_.poses.size() - 1) {
+        double dx1 = path_.poses[lookahead_idx].pose.position.x - path_.poses[lookahead_idx-1].pose.position.x;
+        double dy1 = path_.poses[lookahead_idx].pose.position.y - path_.poses[lookahead_idx-1].pose.position.y;
+        double dx2 = path_.poses[lookahead_idx+1].pose.position.x - path_.poses[lookahead_idx].pose.position.x;
+        double dy2 = path_.poses[lookahead_idx+1].pose.position.y - path_.poses[lookahead_idx].pose.position.y;
+        
+        double angle1 = std::atan2(dy1, dx1);
+        double angle2 = std::atan2(dy2, dx2);
+        double angle_diff = std::abs(angle2 - angle1);
+        if (angle_diff > M_PI) angle_diff = 2 * M_PI - angle_diff;
+        
+        curvature = angle_diff / std::sqrt(dx1*dx1 + dy1*dy1);
+    }
+    
+    path_curvature_ = curvature;
 }
 
 void PurePursuitController::computeControl()
@@ -162,20 +213,31 @@ void PurePursuitController::computeControl()
     double roll, pitch, yaw;
     m.getRPY(roll, pitch, yaw);
 
+    double steering_gain = this->get_parameter("steering_gain").as_double();
     double alpha = std::atan2(dy, dx);
-    double delta = alpha - yaw;
+    double heading_error = alpha - yaw;
     
-    while (delta > M_PI) delta -= 2.0 * M_PI;
-    while (delta < -M_PI) delta += 2.0 * M_PI;
+    while (heading_error > M_PI) heading_error -= 2.0 * M_PI;
+    while (heading_error < -M_PI) heading_error += 2.0 * M_PI;
 
     geometry_msgs::msg::Twist cmd_vel;
-    if (std::abs(delta) < M_PI / 2.0) {
-        cmd_vel.linear.x = linear_velocity_;
-    } else {
-        cmd_vel.linear.x = 0.0;
-    }
     
-    cmd_vel.angular.z = std::max(-max_angular_velocity_, std::min(max_angular_velocity_, 2.0 * delta));
+    double curvature_factor = std::max(0.3, 1.0 - path_curvature_);
+    double heading_factor = std::cos(heading_error);
+    cmd_vel.linear.x = linear_velocity_ * curvature_factor * heading_factor;
+
+    double lookahead_dist = std::sqrt(dx*dx + dy*dy);
+    if (lookahead_dist > 0.001) {
+        double curvature = 2.0 * std::sin(heading_error) / lookahead_dist;
+        cmd_vel.angular.z = std::max(-max_angular_velocity_,
+                                   std::min(max_angular_velocity_,
+                                          steering_gain * cmd_vel.linear.x * curvature));
+    }
+
+    if (std::abs(heading_error) > M_PI / 2.0) {
+        cmd_vel.linear.x = 0.0;
+        cmd_vel.angular.z = std::copysign(max_angular_velocity_ / 2.0, heading_error);
+    }
 
     cmd_vel_pub_->publish(cmd_vel);
     RCLCPP_DEBUG(this->get_logger(), "Published cmd_vel: linear.x=%.2f, angular.z=%.2f", 

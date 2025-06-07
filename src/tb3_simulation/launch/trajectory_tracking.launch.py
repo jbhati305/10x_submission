@@ -72,14 +72,21 @@ def generate_launch_description():
     )
 
     # Trajectory Generator
+    waypoints_file_path = os.path.join(pkg_trajectory_tracking, 'config', 'waypoints.yaml')
+    print(f"Using waypoints file: {waypoints_file_path}")  # Debug output
     trajectory_generator = Node(
         package='trajectory_tracking',
         executable='trajectory_generator',
         name='trajectory_generator',
         parameters=[{
             'use_sim_time': True,
-            'waypoints_file': os.path.join(pkg_trajectory_tracking, 'config', 'waypoints.yaml')
-        }]
+            'waypoints_file': waypoints_file_path,
+            'path_resolution': 0.02,
+            'weight_data': 0.1,
+            'weight_smooth': 0.8,
+            'weight_curvature': 0.1
+        }],
+        output='screen'
     )
 
     # Pure Pursuit Controller
@@ -97,6 +104,26 @@ def generate_launch_description():
         }]
     )
 
+    # RViz
+    rviz_config_path = os.path.join(pkg_tb3_simulation, 'rviz', 'trajectory_tracking.rviz')
+    rviz = Node(
+        package='rviz2',
+        executable='rviz2',
+        name='rviz2',
+        arguments=['-d', rviz_config_path],
+        parameters=[{'use_sim_time': True}],
+        output='screen'
+    )
+
+    # Mogi Trajectory Publisher
+    mogi_trajectory_publisher = Node(
+        package='mogi_trajectory_server',
+        executable='mogi_trajectory_server',
+        name='trajectory_publisher',
+        parameters=[{'use_sim_time': True}],
+        output='screen'
+    )
+
     return LaunchDescription([
         gazebo,
         robot_state_publisher,
@@ -104,4 +131,6 @@ def generate_launch_description():
         bridge,
         trajectory_generator,
         pure_pursuit_controller,
+        rviz,
+        mogi_trajectory_publisher,
     ]) 

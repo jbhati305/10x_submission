@@ -1,34 +1,34 @@
 waypoints:
 
-  - x: 0.0
-    y: 0.0      # Center start
+  - x: -0.0
+    y: -0.0      # Center start
 
-  - x: -3.0
-    y: 0.0      # Top point becomes leftmost
+  - x: 3.0
+    y: -0.0      # Top point becomes rightmost
 
-  - x: -1.22
-    y: 0.88     # Inner right becomes upper left
+  - x: 1.22
+    y: -0.88     # Inner right becomes lower right
 
-  - x: -0.93
-    y: 2.85     # Outer right becomes top
+  - x: 0.93
+    y: -2.85     # Outer right becomes bottom
 
-  - x: 0.47
-    y: 1.43     # Inner lower right becomes upper right
+  - x: -0.47
+    y: -1.43     # Inner lower right becomes lower left
 
-  - x: 2.43
-    y: 1.77     # Outer lower right becomes rightmost
+  - x: -2.43
+    y: -1.77     # Outer lower right becomes leftmost
 
-  - x: 1.2
-    y: 0.0      # Inner bottom becomes right
+  - x: -1.2
+    y: -0.0      # Inner bottom becomes left
 
-  - x: 2.43
-    y: -1.77    # Outer lower left becomes lower right
+  - x: -2.43
+    y: 1.77      # Outer lower left becomes upper left
 
-  - x: 0.47
-    y: -1.43    # Inner lower left becomes lower left
+  - x: -0.47
+    y: 1.43      # Inner lower left becomes upper left
 
-  - x: -0.93
-    y: -2.85    # Outer left becomes bottom
+  - x: 0.93
+    y: 2.85      # Outer left becomes top
 
-  - x: -1.22
-    y: -0.88    # Inner upper left becomes upper left
+  - x: 1.22
+    y: 0.88      # Inner upper left becomes upper right

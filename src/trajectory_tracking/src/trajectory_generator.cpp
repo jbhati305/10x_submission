@@ -1,3 +1,6 @@
+#include <memory>
+#include <vector>
+#include <string>
 #include "rclcpp/rclcpp.hpp"
 #include "nav_msgs/msg/path.hpp"
 #include "geometry_msgs/msg/pose_stamped.hpp"
@@ -11,7 +14,6 @@
 #include <filesystem>
 #include <string>
 #include "trajectory_tracking/bspline.h"
-#include "trajectory_tracking/trajectory_parameterizer.h"
 #include "visualization_msgs/msg/marker_array.hpp"
 #include <memory>
 

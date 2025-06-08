@@ -83,23 +83,11 @@ ament_target_dependencies(pure_pursuit_controller
   visualization_msgs
 )
 
-# Add trajectory visualizer executable
-add_executable(trajectory_visualizer src/trajectory_visualizer.cpp)
-ament_target_dependencies(trajectory_visualizer
-  rclcpp
-  nav_msgs
-  geometry_msgs
-  tf2
-  tf2_geometry_msgs
-  visualization_msgs
-)
-
 # Install targets
 install(TARGETS
   bspline
   trajectory_generator
   pure_pursuit_controller
-  trajectory_visualizer
   ARCHIVE DESTINATION lib
   LIBRARY DESTINATION lib
   RUNTIME DESTINATION lib/${PROJECT_NAME}

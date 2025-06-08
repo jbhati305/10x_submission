@@ -2,11 +2,7 @@
 
 A ROS 2 implementation of trajectory tracking for TurtleBot3 Waffle using pure pursuit control with B-spline path smoothing.
 
-<div align="center">
-  <video width="640" height="480" controls>
-    <source src="https://github.com/jbhati305/10x_submission/blob/main/Images_%26_videos/simulation_video.mp4" type="video/mp4">
-  </video>
-</div>
+https://github.com/user-attachments/assets/1a4aa9cf-21e7-4076-85f1-7b832b880678
 
 ## Features
 - B-spline path smoothing with trapezoidal velocity profile

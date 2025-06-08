@@ -48,8 +48,7 @@ TrajectoryGenerator::TrajectoryGenerator() : Node("trajectory_generator")
     this->declare_parameter("control_point_multiplier", 2);  // Number of control points between waypoints
     this->declare_parameter("max_velocity", 0.5);  // Maximum velocity
     this->declare_parameter("min_velocity", 0.15);  // Minimum velocity in curves
-    this->declare_parameter("max_acceleration", 0.15);  // Maximum acceleration for S-curve
-    this->declare_parameter("max_jerk", 0.3);  // Maximum jerk for S-curve
+    this->declare_parameter("max_acceleration", 0.15);  // Maximum acceleration for trapezoidal profile
     this->declare_parameter("sampling_interval", 0.05);
 
     path_pub_ = this->create_publisher<nav_msgs::msg::Path>("/path", 10);
@@ -248,7 +247,6 @@ void TrajectoryGenerator::generateTrajectory()
             velocities[i] = cruise_v;
         }
     }
-    double total_duration = 0.0;
 
     // Create time-parameterized trajectory
     struct TimedPoint {
@@ -265,7 +263,6 @@ void TrajectoryGenerator::generateTrajectory()
         double dx = smoothed_points[i].x - smoothed_points[i-1].x;
         double dy = smoothed_points[i].y - smoothed_points[i-1].y;
         double segment_length = std::sqrt(dx*dx + dy*dy);
-        current_distance += segment_length;
         // Get velocity from the profile and ensure it's not below minimum
         double velocity = std::max(min_velocity, velocities[std::min(i, velocities.size() - 1)]);
         // Calculate time increment for this segment
@@ -281,7 +278,7 @@ void TrajectoryGenerator::generateTrajectory()
         csv << pt.x << "," << pt.y << "," << pt.t << "," << pt.v << "\n";
     }
     csv.close();
-    RCLCPP_INFO(this->get_logger(), "Generated S-curve velocity profile with duration %.2f seconds", total_duration);
+    RCLCPP_INFO(this->get_logger(), "Generated trapezoidal velocity profile with duration %.2f seconds", current_time);
 }
 
 void TrajectoryGenerator::publishWaypoints()

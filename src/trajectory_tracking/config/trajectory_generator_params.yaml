@@ -5,8 +5,8 @@ trajectory_generator:
     bspline_samples: 300
     control_point_spacing: 0.15
     control_point_multiplier: 4
-    max_velocity: 0.3
+    max_velocity: 0.8
     min_velocity: 0.05
-    max_acceleration: 0.08
-    max_jerk: 0.15
-    sampling_interval: 0.03 
+    max_acceleration: 0.5
+    max_jerk: 0.5
+    sampling_interval: 0.05 

@@ -1,10 +1,9 @@
-#ifndef TRAJECTORY_TRACKING_TRAJECTORY_PARAMETERIZER_H
-#define TRAJECTORY_TRACKING_TRAJECTORY_PARAMETERIZER_H
+#pragma once
 
 #include <vector>
+#include <memory>
+#include <geometry_msgs/msg/pose_stamped.hpp>
 #include <cmath>
-#include "trajectory_tracking/msg/timed_trajectory.hpp"
-#include "trajectory_tracking/msg/timed_trajectory_point.hpp"
 
 namespace trajectory_tracking {
 
@@ -17,14 +16,6 @@ struct VelocityLimits {
 class TrajectoryParameterizer {
 public:
     TrajectoryParameterizer(const VelocityLimits& limits);
-
-    /**
-     * Generate a time-parameterized trajectory using an S-curve velocity profile
-     * @param waypoints Vector of 2D points representing the path
-     * @return TimedTrajectory message containing the time-parameterized points
-     */
-    trajectory_tracking::msg::TimedTrajectory parameterizeTrajectory(
-        const std::vector<std::pair<double, double>>& waypoints);
 
 private:
     /**
@@ -71,6 +62,4 @@ private:
     VelocityLimits limits_;
 };
 
-} // namespace trajectory_tracking
-
-#endif // TRAJECTORY_TRACKING_TRAJECTORY_PARAMETERIZER_H 
+} // namespace trajectory_tracking 

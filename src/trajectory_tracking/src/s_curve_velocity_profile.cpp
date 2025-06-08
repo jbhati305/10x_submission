@@ -31,18 +31,51 @@ std::vector<double> SCurveVelocityProfile::generateProfile(double distance) {
     time_points_.resize(num_points);
     velocities_.resize(num_points);
 
+    double max_v = constraints_.max_velocity;
+    double max_a = constraints_.max_acceleration;
+    double max_j = constraints_.max_jerk;
+
     for (int i = 0; i < num_points; ++i) {
         double t = (total_duration_ * i) / (num_points - 1);
         time_points_[i] = t;
-        velocities_[i] = getVelocityAtTime(t);
+
+        // Calculate velocity based on S-curve phases
+        double v = 0.0;
+        if (t <= t_j) {  // Initial jerk phase
+            v = (max_j * t * t) / 2.0;
+        } else if (t <= t_j + t_a) {  // Constant acceleration phase
+            double t_elapsed = t - t_j;
+            v = (max_j * t_j * t_j) / 2.0 + max_a * t_elapsed;
+        } else if (t <= t_j + t_a + t_v) {  // Constant velocity phase
+            v = max_v;
+        } else if (t <= total_duration_ - t_j) {  // Deceleration phase
+            double t_elapsed = t - (t_j + t_a + t_v);
+            v = max_v - (max_a * t_elapsed);
+        } else {  // Final jerk phase
+            double t_elapsed = total_duration_ - t;
+            v = (max_j * t_elapsed * t_elapsed) / 2.0;
+        }
+
+        velocities_[i] = std::min(max_v, std::max(0.01, v));  // Ensure velocity is bounded
     }
 
     return velocities_;
 }
 
 double SCurveVelocityProfile::getVelocityAtTime(double time) const {
-    if (time < 0 || time > total_duration_) {
-        return 0.0;
+    // Ensure we always return a minimum velocity to prevent division by zero
+    const double MIN_VELOCITY = 0.01;  // 1 cm/s minimum velocity
+    
+    if (velocities_.empty()) {
+        return MIN_VELOCITY;
+    }
+    
+    if (time < 0) {
+        return std::max(MIN_VELOCITY, velocities_.front());
+    }
+    
+    if (time > total_duration_) {
+        return std::max(MIN_VELOCITY, velocities_.back());
     }
 
     // Find the appropriate time segment
@@ -50,11 +83,12 @@ double SCurveVelocityProfile::getVelocityAtTime(double time) const {
         if (time >= time_points_[i] && time <= time_points_[i + 1]) {
             // Linear interpolation between points
             double t = (time - time_points_[i]) / (time_points_[i + 1] - time_points_[i]);
-            return velocities_[i] + t * (velocities_[i + 1] - velocities_[i]);
+            double interpolated_velocity = velocities_[i] + t * (velocities_[i + 1] - velocities_[i]);
+            return std::max(MIN_VELOCITY, interpolated_velocity);
         }
     }
 
-    return velocities_.back();
+    return std::max(MIN_VELOCITY, velocities_.back());
 }
 
 double SCurveVelocityProfile::getTotalDuration() const {
